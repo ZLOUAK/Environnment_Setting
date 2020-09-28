@@ -1,0 +1,143 @@
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.conf.Configured;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.permission.FsAction;
+import org.apache.hadoop.fs.permission.FsPermission;
+import org.apache.hadoop.hbase.*;
+import org.apache.hadoop.hbase.client.*;
+import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
+import org.apache.hadoop.hbase.mapreduce.HFileOutputFormat2;
+import org.apache.hadoop.hbase.mapreduce.LoadIncrementalHFiles;
+import org.apache.hadoop.hbase.mapreduce.TableOutputFormat;
+import org.apache.hadoop.io.compress.SnappyCodec;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.apache.hadoop.util.GenericOptionsParser;
+import org.apache.hadoop.util.Tool;
+import org.apache.hadoop.util.ToolRunner;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ Bulk import example<br>
+ * <li>args[0]: HDFS input path
+ * <li>args[1]: HDFS output path
+ * <li>args[2]: HBase table name
+ */
+public class Driver extends Configured implements Tool
+{
+    @Override
+    public int run(String[] args) throws Exception {
+        int status =-1;
+        HBaseConfiguration config = new HBaseConfiguration();
+        new GenericOptionsParser(config, args).getRemainingArgs();
+        // Load hbase-site.xml
+        config.set("hbase.zookeeper.quorum", "hbase");
+        config.set("hbase.zookeeper.property.clientPort", "2181");
+        config.set("hbase.master", "hdfs://localhost:9000/");
+        config.set("hbase.table.name", "Data_Cube");
+        config.set("StationFamily", "SLocation");
+        config.set("hbase.fs.tmp.dir","/home/Hbase/HFiles");
+        config.set("hbase.loadincremental.validate.hfile","false");
+        HBaseAdmin.available(config);
+        Job job = Job.getInstance(config);
+        job.setJarByClass(HBaseKVMapper.class);
+        job.setMapperClass(HBaseKVMapper.class);
+        job.setMapOutputKeyClass(ImmutableBytesWritable.class);
+        job.setMapOutputValueClass(KeyValue.class);
+        job.setInputFormatClass(TextInputFormat.class);
+        job.setOutputFormatClass(TableOutputFormat.class);
+//input & output paths
+
+        Path dataPath = new Path("/home/hadoop/test");
+        FileInputFormat.addInputPath(job, dataPath);
+        Path hfilePath = new Path("/home/hadoop/output");
+        FileOutputFormat.setOutputPath(job, hfilePath);
+// settings and Hbase connexion
+        Connection connection = ConnectionFactory.createConnection(config);
+        Table table = connection.getTable(TableName.valueOf(config.get("hbase.table.name")));
+        Admin admin = connection.getAdmin();
+        RegionLocator regionLocator = connection.getRegionLocator(TableName.valueOf(config.get("hbase.table.name").getBytes()));
+        boolean result1;
+        try {
+            result1 = admin.tableExists(TableName.valueOf(config.get("hbase.table.name")));
+            if (result1) {
+                System.out.println("Table Exist" + TableName.valueOf(config.get("hbase.table.name")));
+            } else {
+                HTableDescriptor descriptor = new HTableDescriptor(TableName.valueOf(config.get("hbase.table.name")));
+                descriptor.addFamily(new HColumnDescriptor(config.get("StationFamily")));
+                admin.createTable(descriptor);
+                System.out.println("Table Created" + TableName.valueOf(config.get("hbase.table.name")));
+            }
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+// Instantiating HTable class
+        try {
+            // Auto configure partitioner and reducer
+            HFileOutputFormat2.configureIncrementalLoad(job, table, regionLocator);
+            HFileOutputFormat2.setOutputPath(job, hfilePath);
+            HFileOutputFormat2.setCompressOutput(job, true);
+            HFileOutputFormat2.setOutputCompressorClass(job, SnappyCodec.class);
+            //change permissions so that HBase user can read it
+            FileSystem fs =  FileSystem.get(config);
+            FsPermission changedPermission=new FsPermission(FsAction.ALL,FsAction.ALL,FsAction.ALL);
+            fs.setPermission(hfilePath, changedPermission);
+            List<String> files = getAllFilePath(hfilePath, fs);
+            for (String file : files) {
+                fs.setPermission(new Path(file), changedPermission);
+                System.out.println("Changing permission for file " + file);
+            }
+//bulk load hbase files Importing the generated HFiles into a HBase table=
+            LoadIncrementalHFiles loader = new LoadIncrementalHFiles(config);
+            loader.doBulkLoad(hfilePath,admin , table,regionLocator);
+            //delete the hfiles
+            FileSystem.get(config).delete(hfilePath, true);
+            job.waitForCompletion(true);
+            status = job.isSuccessful() ? 0 : -1;
+            return status;
+        } finally {
+            table.close();
+            connection.close();
+        }
+    }
+    public static void main(String[] args) {
+        int result;
+        try
+        {
+            result= ToolRunner.run(new Configuration(), new Driver(), args);
+            if(0 == result)
+            { System.out.println("Successfully...Data_Cube...Processing");}
+            else
+            { System.out.println("Failed...Data_Cube...Processing"); }
+        }
+        catch(Exception exception)
+        { exception.printStackTrace();}
+    }
+    public static List<String> getAllFilePath(Path filePath, FileSystem fs) throws IOException {
+        List<String> fileList = new ArrayList<>();
+        FileStatus[] fileStatus = fs.listStatus(filePath);
+        for (FileStatus fileStat : fileStatus) {
+            if (fileStat.isDirectory()) {
+                fileList.add(fileStat.getPath().toString());
+                fileList.addAll(getAllFilePath(fileStat.getPath(), fs));
+            } else {
+                fileList.add(fileStat.getPath().toString());
+            }
+        }
+        return fileList;
+    }
+}
+
+/*
+            int i=0;
+            for(String val : value.toString().split("\\s+")){
+                fields[i] = csvParser.parseLine(val.toString())[0];
+                i++;
+            }
+ */
