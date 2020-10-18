@@ -19,8 +19,7 @@ import java.io.IOException;
  * The KeyValue value holds the HBase mutation information (column family,
  * column, and value)
  */
-public class HBaseKVMapper extends
-        Mapper<LongWritable, Text, ImmutableBytesWritable, KeyValue> {
+public class HBaseKVMapper extends Mapper<LongWritable, Text, ImmutableBytesWritable, KeyValue> {
 
     CSVParser csvParser = new CSVParser();
     String tableName = "";
@@ -44,6 +43,7 @@ public class HBaseKVMapper extends
                 if (!values[0].equals("")) {
                     hKey.set(values[0].getBytes());
 
+                }
                 if (!values[1].equals("")) {
                    kv = new KeyValue(hKey.get(), HColumnEnum.SRV_COL_FAM.getColumnName(),
                         HColumnEnum.SRV_COL_LATITUDE.getColumnName(), values[1].getBytes());
@@ -54,6 +54,11 @@ public class HBaseKVMapper extends
                                 HColumnEnum.SRV_COL_LONGITUDE.getColumnName(), values[2].getBytes());
                         context.write(hKey, kv);
                 }
+
+            if (!values[3].equals("") && !values[3].equals("-999.9")) {
+                kv = new KeyValue(hKey.get(), HColumnEnum.SRV_COL_FAM.getColumnName(),
+                        HColumnEnum.SRV_COL_ELEVATION.getColumnName(), values[3].getBytes());
+                context.write(hKey, kv);
                 }
 
             } catch(InterruptedException | IOException e){
